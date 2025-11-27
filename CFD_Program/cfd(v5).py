@@ -1,13 +1,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider, Button, RadioButtons, TextBox, CheckButtons
+from matplotlib.widgets import Slider, RadioButtons, TextBox, CheckButtons
 from PIL import Image
 import os
 import time
 
-# -----------------------------
 # Grid/domain configuration
-# -----------------------------
 NX, NY = 160, 80
 X_MIN, X_MAX = 0.0, 12.0
 Y_MIN, Y_MAX = 0.0, 6.0
@@ -29,9 +27,8 @@ try:
 except NameError:
     SCRIPT_DIR = os.getcwd()
 
-# -----------------------------
 # Coordinate arrays
-# -----------------------------
+
 x_lin = np.linspace(X_MIN, X_MAX, NX)
 y_lin = np.linspace(Y_MIN, Y_MAX, NY)
 Xg, Yg = np.meshgrid(x_lin, y_lin)
@@ -40,9 +37,8 @@ x_centers = X_MIN + (np.arange(GRID_COLS) + 0.5) * cell_w
 y_centers = Y_MIN + (np.arange(GRID_ROWS) + 0.5) * cell_h
 Xa, Ya = np.meshgrid(x_centers, y_centers)
 
-# -----------------------------
 # Utilities
-# -----------------------------
+
 def velocity_to_length(speed):
     k = cell_max_len / max(VEL_MAX, 1e-9)
     return np.minimum(speed * k, cell_max_len)
@@ -59,41 +55,6 @@ def bilerp(field, xq, yq):
     f01 = field[j0 + 1, i0]
     f11 = field[j0 + 1, i0 + 1]
     return (1 - tx)*(1 - ty)*f00 + tx*(1 - ty)*f10 + (1 - tx)*ty*f01 + tx*ty*f11
-
-def load_mask_from_png(path, threshold=128):
-    if not os.path.exists(path):
-        return None
-    arr = np.array(Image.open(path).convert("L").resize((NX, NY), Image.NEAREST))
-    solid = arr < threshold
-    return np.flipud(solid)
-
-def fill_internal_holes(mask_solid):
-    fluid = ~mask_solid
-    reachable = np.zeros_like(fluid, dtype=bool)
-
-    reachable[0, :] |= fluid[0, :]
-    reachable[-1, :] |= fluid[-1, :]
-    reachable[:, 0] |= fluid[:, 0]
-    reachable[:, -1] |= fluid[:, -1]
-
-    changed = True
-    while changed:
-        nb = (np.roll(reachable, 1, axis=0) |
-              np.roll(reachable, -1, axis=0) |
-              np.roll(reachable, 1, axis=1) |
-              np.roll(reachable, -1, axis=1))
-        new_reach = nb & fluid
-        new = new_reach | reachable
-        changed = np.any(new != reachable)
-        reachable = new
-
-        reachable[0, :] |= fluid[0, :]
-        reachable[-1, :] |= fluid[-1, :]
-        reachable[:, 0] |= fluid[:, 0]
-        reachable[:, -1] |= fluid[:, -1]
-
-    fixed_mask = ~(reachable)
-    return fixed_mask
 
 def analytic_cylinder_velocity(Uinf, cx, cy, a):
     X = Xg - cx
@@ -159,19 +120,18 @@ def sample_arrows(Ux, Uy, mask_bool):
     Var = np.where(solid, 0.0, Var)
     return Uar, Var, spd
 
-# -----------------------------
+
 # Initial field/mask
-# -----------------------------
+
 U0 = VEL_INIT
 cx0, cy0, a0 = (X_MIN + X_MAX)/2, (Y_MIN + Y_MAX)/2, 0.8
 Ux0, Uy0, mask0 = analytic_cylinder_velocity(U0, cx0, cy0, a0)
 Uar0, Var0, spd0 = sample_arrows(Ux0, Uy0, mask0)
 
-# -----------------------------
 # Figure and artists
-# -----------------------------
+
 fig, ax = plt.subplots(figsize=(11, 5.6))
-plt.subplots_adjust(left=0.07, right=0.98, top=0.90, bottom=0.34)
+plt.subplots_adjust(left=0.07, right=0.98, top=0.90, bottom=0.25)
 
 for i in range(GRID_COLS + 1):
     ax.axvline(X_MIN + i * cell_w, linewidth=0.5, alpha=0.12)
@@ -189,58 +149,38 @@ mask_img = ax.imshow(mask0, extent=[X_MIN, X_MAX, Y_MIN, Y_MAX], origin='lower',
 ax.set_xlabel("x"); ax.set_ylabel("y")
 ax.set_navigate(False)
 
-# -----------------------------
-# Widgets
-# -----------------------------
-slider_ax = fig.add_axes([0.12, 0.22, 0.55, 0.04])
-vel_slider = Slider(slider_ax, "Velocity", VEL_MIN, VEL_MAX, valinit=VEL_INIT)
+# Layout helper (12-col grid)
+def ui_slot(col, span=1, *, n=12, y=0.05, h=0.08, left=0.06, right=0.98, gutter=0.008):
+    total_w = right - left
+    col_w   = (total_w - (n - 1) * gutter) / n
+    x = left + col * (col_w + gutter)
+    w = col_w * span + gutter * (span - 1)
+    return [x, y, w, h]
 
-mode_ax = fig.add_axes([0.83, 0.21, 0.14, 0.10])
+# Widget
+vel_box_ax = fig.add_axes(ui_slot(0, span=3, y=0.13, h=0.08))
+vel_box = TextBox(vel_box_ax, "Velocity", initial=str(VEL_INIT))
+
+mode_ax = fig.add_axes(ui_slot(3, span=4, y=0.13, h=0.08))
 mode_radio = RadioButtons(mode_ax, ("Analytic Cylinder", "Numerical Mask"), active=0)
 
-path_ax = fig.add_axes([0.12, 0.16, 0.55, 0.04])
-path_box = TextBox(path_ax, "Mask PNG:", initial=os.path.join(SCRIPT_DIR, "mask_circle.png"))
+draw_ax = fig.add_axes(ui_slot(7, span=2, y=0.13, h=0.08))
+draw_check = CheckButtons(draw_ax, ["Draw"], [False])
 
-th_ax = fig.add_axes([0.12, 0.11, 0.20, 0.04])
-th_slider = Slider(th_ax, "Threshold", 1, 254, valinit=128, valstep=1)
+checks_ax = fig.add_axes(ui_slot(0, span=4, y=0.05, h=0.08))
+vis_checks = CheckButtons(checks_ax, ["Arrows", "Streamlines", "Colormap"], [True, False, False])
 
-load_ax = fig.add_axes([0.46, 0.11, 0.08, 0.05])
-load_btn = Button(load_ax, "Load")
-
-holes_ax = fig.add_axes([0.55, 0.11, 0.12, 0.05])
-holes_btn = Button(holes_ax, "Fix Holes")
-
-copy_ax  = fig.add_axes([0.12, 0.03, 0.10, 0.05])
-paste_ax = fig.add_axes([0.23, 0.03, 0.10, 0.05])
-clear_ax = fig.add_axes([0.34, 0.03, 0.10, 0.05])
-save_ax  = fig.add_axes([0.45, 0.03, 0.10, 0.05])
-
-copy_btn  = Button(copy_ax,  "Copy Mask")
-paste_btn = Button(paste_ax, "Paste Mask")
-clear_btn = Button(clear_ax, "Clear Mask")
-save_btn  = Button(save_ax,  "Save Mask")
-
-checks_ax  = fig.add_axes([0.83, 0.07, 0.14, 0.14])
-vis_checks = CheckButtons(checks_ax, ["Show Arrows", "Show Streamlines", "Show Colormap"], [True, False, False])
-
-alpha_ax = fig.add_axes([0.67, 0.03, 0.15, 0.05])
+alpha_ax = fig.add_axes(ui_slot(4, span=3, y=0.05, h=0.08))
 alpha_slider = Slider(alpha_ax, "Colormap α", 0.0, 1.0, valinit=0.5)
 
-# --- Draw UI (NEW) ---
-draw_ax = fig.add_axes([0.67, 0.11, 0.10, 0.05])
-draw_check = CheckButtons(draw_ax, ["Draw Mode"], [False])
-
-brush_ax = fig.add_axes([0.78, 0.11, 0.19, 0.04])
+brush_ax = fig.add_axes(ui_slot(7, span=5, y=0.05, h=0.08))
 brush_slider = Slider(brush_ax, "Brush Radius", 1, 30, valinit=6, valstep=1)
 
-# -----------------------------
 # Text and state
-# -----------------------------
 info_txt = ax.text(0.50, 1.02, "", transform=ax.transAxes, ha='left', va='bottom', fontsize=9)
 
 current_mode = "Analytic Cylinder"
-current_mask = mask0.copy()
-copied_mask  = None
+current_mask = np.zeros_like(mask0, dtype=bool)  # start with no extra solids
 stream_obj   = None
 
 # Particles
@@ -250,26 +190,60 @@ py = np.random.uniform(Y_MIN+0.2, Y_MAX-0.2, size=N_PART)
 last_update = time.time()
 part_scatter = ax.scatter(px, py, s=8, alpha=0.8)
 
-# -----------------------------
 # Field helpers
-# -----------------------------
+def get_current_velocity():
+    try:
+        U = float(vel_box.text)
+    except Exception:
+        U = VEL_INIT
+    return max(VEL_MIN, min(VEL_MAX, U))
+
 def vel_field(U):
+
     if current_mode == "Analytic Cylinder":
-        Ux, Uy, m = analytic_cylinder_velocity(U, (X_MIN+X_MAX)/2, (Y_MIN+Y_MAX)/2, 0.8)
+        Ux_raw, Uy_raw, cyl_mask = analytic_cylinder_velocity(U, (X_MIN+X_MAX)/2, (Y_MIN+Y_MAX)/2, 0.8)
+        physics_mask = cyl_mask 
+        display_mask = np.logical_or(cyl_mask, current_mask)
+
+
+        Ux_vis = np.where(physics_mask, 0.0, Ux_raw)
+        Uy_vis = np.where(physics_mask, 0.0, Uy_raw)
+
+
+        adv_mask = cyl_mask                
+        Ux_adv = np.where(adv_mask, 0.0, Ux_raw)
+        Uy_adv = np.where(adv_mask, 0.0, Uy_raw)
+
     else:
-        m = current_mask
-        phi = solve_potential_vectorized(m, U, iters=200, omega=1.7)
-        Ux, Uy = grad_centered(phi)
-    spd = np.sqrt(Ux**2 + Uy**2)
-    return Ux, Uy, m, spd
+
+        base_mask = current_mask
+        phi = solve_potential_vectorized(base_mask, U, iters=200, omega=1.7)
+        Ux_raw, Uy_raw = grad_centered(phi)
+
+        physics_mask = base_mask    
+        display_mask = base_mask
+
+
+        Ux_vis = np.where(physics_mask, 0.0, Ux_raw)
+        Uy_vis = np.where(physics_mask, 0.0, Uy_raw)
+
+        cx, cy, a = (X_MIN+X_MAX)/2, (Y_MIN+Y_MAX)/2, 0.8
+        X = Xg - cx; Y = Yg - cy
+        cyl_mask = (X*X + Y*Y) <= a*a
+        adv_mask = cyl_mask   
+        Ux_adv = np.where(adv_mask, 0.0, Ux_raw)
+        Uy_adv = np.where(adv_mask, 0.0, Uy_raw)
+
+    spd = np.sqrt(Ux_vis**2 + Uy_vis**2)
+    return Ux_vis, Uy_vis, Ux_adv, Uy_adv, physics_mask, display_mask, spd
 
 def recompute():
     global stream_obj
-    U = vel_slider.val
-    Ux, Uy, m, spd = vel_field(U)
+    U = get_current_velocity()
+    Ux_vis, Uy_vis, _, _, physics_mask, display_mask, spd = vel_field(U)
 
-    # Arrows
-    Uar, Var, _ = sample_arrows(Ux, Uy, m)
+    # Arrows (sample against physics_mask)
+    Uar, Var, _ = sample_arrows(Ux_vis, Uy_vis, physics_mask)
     quiv.set_UVC(Uar, Var)
     quiv.set_visible(vis_checks.get_status()[0])
 
@@ -277,7 +251,7 @@ def recompute():
     bg_img.set_data(spd)
     bg_img.set_alpha(alpha_slider.val if vis_checks.get_status()[2] else 0.0)
 
-    # Streamlines: remove old safely, then redraw if enabled
+    # Streamlines
     if stream_obj is not None:
         try:
             if getattr(stream_obj, "lines", None) is not None:
@@ -286,53 +260,28 @@ def recompute():
                 stream_obj.arrows.remove()
         except Exception:
             pass
-        stream_obj = None
-
+    stream_obj = None
     if vis_checks.get_status()[1]:
-        stream_obj = ax.streamplot(x_lin, y_lin, Ux, Uy, density=1.4)
+        stream_obj = ax.streamplot(x_lin, y_lin, Ux_vis, Uy_vis, density=1.4)
 
-    # Mask overlay
-    mask_img.set_data(m.astype(float))
-
+    # Overlay
+    mask_img.set_data(display_mask.astype(float))
     fig.canvas.draw_idle()
 
 def restart_sim():
-    """Reset particles and recompute flow with the current mask."""
     global px, py, last_update
     px[:] = X_MIN + 0.02
     py[:] = np.random.uniform(Y_MIN+0.2, Y_MAX-0.2, size=py.shape[0])
     last_update = time.time()
     recompute()
 
-# -----------------------------
 # UI callbacks
-# -----------------------------
-def on_vel(_):
-    recompute()
-vel_slider.on_changed(on_vel)
 
 def on_mode(label):
     global current_mode
     current_mode = label
     recompute()
 mode_radio.on_clicked(on_mode)
-
-def on_load(_):
-    global current_mask, current_mode
-    m = load_mask_from_png(path_box.text.strip(), int(th_slider.val))
-    if m is not None:
-        current_mask = m
-        current_mode = "Numerical Mask"
-        mode_radio.set_active(1)
-        restart_sim()
-load_btn.on_clicked(on_load)
-
-def on_fix_holes(_):
-    global current_mask, current_mode
-    current_mask = fill_internal_holes(current_mask)
-    current_mode = "Numerical Mask"; mode_radio.set_active(1)
-    restart_sim()
-holes_btn.on_clicked(on_fix_holes)
 
 def on_alpha(_):
     recompute()
@@ -343,53 +292,19 @@ def on_vis_checks(_):
     recompute()
 vis_checks.on_clicked(on_vis_checks)
 
-def on_copy(_):
-    global copied_mask
-    copied_mask = current_mask.copy()
-    info_txt.set_text("Mask copied")
-    fig.canvas.draw_idle()
-
-def on_paste(_):
-    global current_mask, current_mode
-    if copied_mask is not None:
-        current_mask = copied_mask.copy()
-        current_mode = "Numerical Mask"; mode_radio.set_active(1)
-        restart_sim()
-
-def on_clear(_):
-    global current_mask, current_mode
-    current_mask = np.zeros_like(current_mask, dtype=bool)
-    current_mode = "Numerical Mask"; mode_radio.set_active(1)
-    restart_sim()
-
-def on_save(_):
-    path = os.path.join(SCRIPT_DIR, "saved_mask.png")
-    img = (255 * (~current_mask).astype(np.uint8))
-    Image.fromarray(np.flipud(img)).save(path)
-    info_txt.set_text(f"Saved to {path}")
-    fig.canvas.draw_idle()
-
-copy_btn.on_clicked(on_copy)
-paste_btn.on_clicked(on_paste)
-clear_btn.on_clicked(on_clear)
-save_btn.on_clicked(on_save)
-
-def on_key(event):
+def on_vel_submit(text):
     try:
-        meta = bool(event.guiEvent.metaKey)
+        U = float(text)
     except Exception:
-        meta = False
-    if meta and event.key == "c":
-        on_copy(None)
-    elif meta and event.key == "v":
-        on_paste(None)
-    elif meta and event.key == "a":
-        on_clear(None)
-fig.canvas.mpl_connect('key_press_event', on_key)
+        U = VEL_INIT
+    U = max(VEL_MIN, min(VEL_MAX, U))
+    vel_box.set_val(str(U))
+    recompute()
+vel_box.on_submit(on_vel_submit)
 
-# -----------------------------
+
 # Particles
-# -----------------------------
+
 def step_particles(dt, Ux, Uy, mask_bool):
     global px, py
     Upx = bilerp(Ux, px, py)
@@ -401,28 +316,32 @@ def step_particles(dt, Ux, Uy, mask_bool):
         px[out] = X_MIN + 0.02
         py[out] = np.random.uniform(Y_MIN+0.2, Y_MAX-0.2, size=out.sum())
 
-def timer_callback(event):
+def timer_callback(_):
     global last_update
     now = time.time()
     dt = min(0.05, now - last_update)
     last_update = now
-    U = vel_slider.val
-    Ux, Uy, m, _ = vel_field(U)
-    step_particles(dt, Ux, Uy, m)
+    U = get_current_velocity()
+    _, _, Ux_adv, Uy_adv, physics_mask, _, _ = vel_field(U)
+
+
+    step_particles(dt, Ux_adv, Uy_adv, physics_mask)  
+
     part_scatter.set_offsets(np.column_stack([px, py]))
     fig.canvas.draw_idle()
+
 
 timer = fig.canvas.new_timer(interval=30)
 timer.add_callback(timer_callback, None)
 timer.start()
 
-# -----------------------------
-# Drawing tools + "restart on toggle-off"
-# -----------------------------
+
+# Drawing tools (no mode switch)
+
 is_drawing = False
 erase_mode = False
 shift_held = False
-pending_draw_changes = False   # set true whenever user paints/erases
+pending_draw_changes = False 
 
 def world_to_ij(x, y):
     i = int(round((x - X_MIN) / dx))
@@ -446,14 +365,8 @@ def paint_circle(mask, i_c, j_c, r_pix, value):
     else:
         sub[disk] = False
 
-def set_numerical_mode():
-    global current_mode
-    if current_mode != "Numerical Mask":
-        current_mode = "Numerical Mask"
-        mode_radio.set_active(1)
-
 def refresh_mask_only():
-    mask_img.set_data(current_mask.astype(float))
+    mask_img.set_data(np.logical_or(np.zeros_like(current_mask), current_mask).astype(float))
     fig.canvas.draw_idle()
 
 def on_draw_toggled(_):
@@ -462,8 +375,7 @@ def on_draw_toggled(_):
     ax.set_navigate(not enabled)
     fig.canvas.draw_idle()
     if not enabled and pending_draw_changes:
-        set_numerical_mode()
-        restart_sim()
+        restart_sim()    
         pending_draw_changes = False
 draw_check.on_clicked(on_draw_toggled)
 
@@ -498,8 +410,7 @@ def on_mouse_release(event):
     if not is_drawing:
         return
     is_drawing = False
-    # Optional: immediate recompute on stroke end; keep for snappier feedback
-    set_numerical_mode()
+    # Quick refresh after each stroke
     recompute()
 
 def on_key_press_draw(event):
@@ -521,7 +432,6 @@ fig.canvas.mpl_connect('motion_notify_event',  on_mouse_move)
 fig.canvas.mpl_connect('button_release_event', on_mouse_release)
 fig.canvas.mpl_connect('key_press_event',      on_key_press_draw)
 fig.canvas.mpl_connect('key_release_event',    on_key_release_draw)
-
 
 try:
     sample = np.ones((NY, NX), dtype=np.uint8)*255
